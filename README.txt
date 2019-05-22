@@ -1,4 +1,4 @@
-Scarlet Mod v1.0
+Scarlet Mod v1.1
 By Leslie Krause
 
 Scarlet is a thin-wrapper library for Minetest that provides a logical, uniform system of
@@ -19,6 +19,14 @@ Revision History
 
 Version 1.0b (18-May-2019)
   - initial alpha version
+
+Version 1.1b (22-May-2019)
+  - major code reorganization into multiple classes
+  - added support for pixel-based unit of measurement
+  - further simplified some "black magic" constants
+  - implemented margins to simulate container element
+  - revamped translation interface for stateful use
+  - various improvements to element parameter parsing
 
 Compatability
 ----------------------
@@ -44,7 +52,7 @@ Source Code License
 
 The MIT License (MIT)
 
-Copyright (c) 2018, Leslie Krause (leslie@searstower.org)
+Copyright (c) 2019, Leslie Krause (leslie@searstower.org)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this
 software and associated documentation files (the "Software"), to deal in the Software
