@@ -32,8 +32,8 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 	self.padding_width = has_padding and 0.0 or 3 / 10
 	self.padding_height = has_padding and 0.0 or 13 / 40
 
-	-- nominal button height in cell units
-	-- NB: this is 2x the value of m_button_height used internally!
+	-- button height in cell units
+	-- NB: this is 2x the value of m_btn_height used internally!
 	-- original formula: image_size * 15.0 / 13 * 0.35
 	self.button_height = 0.7
 
@@ -42,13 +42,17 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 	self.cell_margin_width = 1 / 5
 	self.cell_margin_height = 2 / 15
 
+	-- point width and height in cell units
+	self.point_width = 1 / 39.6 * 4 / 5
+	self.point_height = 1 / 39.6 * 13 / 15
+
 	self.units = ( function ( )
 		-- cell size measurements
 	       	local factors = {
-			d = { x = 1 / 39.6 * 4 / 5, y = 1 / 39.6 * 13 / 15 },
+			p = { x = self.point_width, y = self.point_height },
                		i = { x = 4 / 5, y = 13 / 15 },			-- imgsize
 	        	c = { x = 1, y = 1 },				-- spacing (unity)
-       			b = { y = self.button_height },			-- 2 x m_button_height
+       			b = { y = self.button_height },			-- 2 x m_btn_height
 	        }
        		local function get_x( v, u, dot_pitch )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.x or v * factors[ u ].x
@@ -62,10 +66,10 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 	self.iunits = ( function ( )
 		-- image size measurements
 		local factors = {
-			d = { x = 1 / 39.6, y = 1 / 39.6 },
+			p = { x = 1 / 39.6, y = 1 / 39.6 },
 			i = { x = 1, y = 1 },				-- imgsize (unity)
 			c = { x = 5 / 4, y = 15 / 13 },			-- spacing
-			b = { y = self.button_height * 15 / 13 },	-- 2 x m_button_height
+			b = { y = self.button_height * 15 / 13 },	-- 2 x m_btn_height
 		}
        		local function get_x( v, u )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.ix or v * factors[ u ].x
@@ -170,38 +174,38 @@ local function element( name, params )
 	return name .. "[" .. table.concat( params, ";" ) .. "]"
 end
 
-local function ElemPos( pos_units, length )
+local function ElemPos( pos_units, length, has_padding )
 	return function ( tx, name, params )
 		local pos = tx.get_pos( params[ 1 ], pos_units, {
-			-tx.padding_width,
-			-tx.padding_height
+			has_padding and -tx.padding_width or 0,
+			has_padding and -tx.padding_height or 0
 		} )
 		assert( pos and #params == length, "Cannot parse formspec element " .. name .. "[]" )
 		return element( name, { pos, unpack( params, 2 ) } )
 	end
 end
 
-local function ElemPosAndDim( pos_units, dim_units, length, is_unlimited )
+local function ElemPosAndDim( pos_units, dim_units, length, has_padding )
 	return function ( tx, name, params )
 		local pos_and_dim = tx.get_pos_and_dim( params[ 1 ], params[ 2 ], pos_units, dim_units, {
-			-tx.padding_width,
-			-tx.padding_height,
+			has_padding and -tx.padding_width or 0,
+			has_padding and -tx.padding_height or 0,
 			0,
 			0
 		} )
-		assert( pos_and_dim and ( #params == length or is_unlimited and #params > length ), "Cannot parse formspec element " .. name .. "[]" )
+		assert( pos_and_dim and #params == length, "Cannot parse formspec element " .. name .. "[]" )
 		return element( name, { pos_and_dim, unpack( params, 3 ) } )
 	end
 end
 
-local function ElemPosAndDimX( pos_units, dim_units, length, is_unlimited )
+local function ElemPosAndDimX( pos_units, dim_units, length, has_padding )
 	return function ( tx, name, params )
 		local pos_and_dim_x = tx.get_pos_and_dim_x( params[ 1 ], params[ 2 ], pos_units, dim_units, {
-			-tx.padding_width,
-			-tx.padding_height,
+			has_padding and -tx.padding_width or 0,
+			has_padding and -tx.padding_height or 0,
 			0
 		} )
-		assert( pos_and_dim_x and ( #params == length or is_unlimited and #params > length ), "Cannot parse formspec element " .. name .. "[]" )
+		assert( pos_and_dim_x and #params == length, "Cannot parse formspec element " .. name .. "[]" )
 		return element( name, { pos_and_dim_x, unpack( params, 3 ) } )
 	end
 end
@@ -211,14 +215,26 @@ end
 ------------------------------
 
 local function SizeElement( )
-	local pattern = "^(%d+)([iscp]?),(%d+)([iscpb]?)$"
+	local pattern = "^([0-9.]+)([iscpd]?),([0-9.]+)([iscpdb]?)$"
 	local replace = "%0.3f,%0.3f,true"
 
 	return function ( tx, name, params )
 		local dim, count = string.gsub( params[ 1 ], pattern, function ( dim_x, u1, dim_y, u2 )
+			if u1 == "s" then
+				u1 = "i"
+				dim_x = dim_x + ( dim_x % 1 == 0 and dim_x - 1 or math.floor( dim_x ) ) * tx.cell_margin_width
+			end
+			if u2 == "s" then
+				u2 = "i"
+				dim_y = dim_x + ( dim_y % 1 == 0 and dim_y - 1 or math.floor( dim_y ) ) * tx.cell_margin_height
+			end
+
+			-- original formulas:
+			-- padding.x * 2 + spacing.x * ( vx - 1.0 ) + imgsize.x
+			-- padding.y * 2 + spacing.y * ( vy - 1.0 ) + imgsize.y + m_btn_height * 2.0 / 3.0
 			return string.format( replace,
-				tx.units.get_x( dim_x, u1 ),
-				tx.units.get_y( dim_y, u2 )
+				tx.units.get_x( dim_x, u1 ) + 1 - tx.padding_width * 2 - 4 / 5,
+				tx.units.get_y( dim_y, u2 ) + 1 - tx.padding_height * 2 - 13 / 15 - tx.button_height / 3
 			)
 		end )
 		assert( count == 1, "Cannot parse formspec element size[]" )
@@ -229,7 +245,7 @@ end
 -- list[<inventory_location>;<list_name>;<x>,<y>;<colums>;<rows>]
 
 local function ListElement( )
-	local pattern = "^(%d+)([icp]?),(%d+)([icpb]?)$"
+	local pattern = "^(-?[0-9.]+)([icpd]?),(-?[0-9.]+)([icpdb]?)$"
 	local replace = "%0.3f,%0.3f"
 
 	return function ( tx, name, params )
@@ -443,11 +459,13 @@ end
 -- caption[<x>,<y>;<w>,<h>;<caption>]
 
 local function CaptionElement( )
+	local use_legacy_render = minetest.is_player == nil
+
 	return function ( tx, name, params )
 		local pos_and_dim = tx.get_pos_and_dim( params[ 1 ], params[ 2 ], tx.units, tx.units, {
-			0,
+			use_legacy_render and 0 or -tx.point_width * 3,
 			-tx.button_height / 2,
-			tx.cell_margin_width,
+			use_legacy_render and tx.cell_margin_width or tx.cell_margin_width + tx.point_width * 6,
 			tx.cell_margin_height + tx.button_height / 2
 		} )
 		assert( pos_and_dim and #params == 3, "Cannot parse formspec element caption[]" )
@@ -526,7 +544,7 @@ scarlet.translate = function ( fs, screen_dpi, gui_scaling )
 		size			= SizeElement( ),
 		list			= ListElement( ),
 		background		= BackgroundElement( ),
-		box			= ElemPosAndDim( tx.units, tx.units, 3, false ),
+		box			= ElemPosAndDim( tx.units, tx.units, 3, true ),
 		button			= ButtonElement( ),
 		button_exit		= ButtonElement( ),
 		image_button		= ImageButtonElement( ),
@@ -537,18 +555,18 @@ scarlet.translate = function ( fs, screen_dpi, gui_scaling )
 		checkbox		= CheckboxElement( ),
 		pwdfield		= PwdFieldElement( ),
 		item_image_button	= ItemImageButtonElement( ),
-		image			= ElemPosAndDim( tx.units, tx.iunits, 3, false ),
-		item_image		= ElemPosAndDim( tx.units, tx.iunits, 3, false ),
+		image			= ElemPosAndDim( tx.units, tx.iunits, 3, true ),
+		item_image		= ElemPosAndDim( tx.units, tx.iunits, 3, true ),
 		field			= FieldElement( ),
 		dropdown		= DropdownElement( ),
 		textlist		= TextListElement( ),
 		vert_scrollbar		= ScrollbarElement( "vertical" ),
 		horz_scrollbar		= ScrollbarElement( "horizontal" ),
-		table			= ElemPosAndDim( tx.units, tx.units, 5, false ),
+		table			= ElemPosAndDim( tx.units, tx.units, 5, true ),
 		textarea		= TextAreaElement( ),
 		caption			= CaptionElement( ),
 		area_tooltip		= AreaTooltipElement( ),		-- not added until 5.0 (https://github.com/minetest/minetest/pull/7469)
-		container		= ElemPos( tx.units, 1 ),		-- not fixed until 5.0 (https://github.com/minetest/minetest/pull/7497)
+		container		= ElemPos( tx.units, 1, false ),	-- not fixed until 5.0 (https://github.com/minetest/minetest/pull/7497)
 		margin			= MarginElement( ),			-- emulation of container[] element
 		margin_end		= MarginEndElement( ),
 		tabheader		= TabHeaderElement( ),
