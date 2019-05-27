@@ -7,6 +7,19 @@
 
 scarlet = { }
 
+--------------------------
+-- Local Helper Functions
+--------------------------
+
+local function element( name, params )
+	return name .. "[" .. table.concat( params, ";" ) .. "]"
+end
+
+local function is_match( text, glob )
+	_ = { string.match( text, glob ) }
+	return #_ > 0
+end
+
 ------------------------
 -- UnitConversion Class
 ------------------------
@@ -23,8 +36,8 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 		ix = 1 / image_size,
 		iy = 1 / image_size,
 		-- spacing (cells per pixel)
-                x = 1 / image_size * 4 / 5,
-                y = 1 / image_size * 13 / 15
+        	x = 1 / image_size * 4 / 5,
+        	y = 1 / image_size * 13 / 15
 	}
 
 	-- padding width and height in cell units
@@ -48,18 +61,18 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 
 	self.units = ( function ( )
 		-- cell size measurements
-	       	local factors = {
+		local factors = {
 			p = { x = self.point_width, y = self.point_height },
-               		i = { x = 4 / 5, y = 13 / 15 },			-- imgsize
-	        	c = { x = 1, y = 1 },				-- spacing (unity)
-       			b = { y = self.button_height },			-- 2 x m_btn_height
-	        }
-       		local function get_x( v, u, dot_pitch )
+			i = { x = 4 / 5, y = 13 / 15 },			-- imgsize
+			c = { x = 1, y = 1 },				-- spacing (unity)
+			b = { y = self.button_height },			-- 2 x m_btn_height
+		}
+		local function get_x( v, u, dot_pitch )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.x or v * factors[ u ].x
 	        end
-       		local function get_y( v, u, dot_pitch )
+		local function get_y( v, u, dot_pitch )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.y or v * factors[ u ].y
-	        end
+		end
 		return { get_x = get_x, get_y = get_y }
 	end )( )
 
@@ -71,14 +84,52 @@ function UnitConversion( screen_dpi, gui_scaling, has_padding )
 			c = { x = 5 / 4, y = 15 / 13 },			-- spacing
 			b = { y = self.button_height * 15 / 13 },	-- 2 x m_btn_height
 		}
-       		local function get_x( v, u )
+		local function get_x( v, u )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.ix or v * factors[ u ].x
-	        end
-       		local function get_y( v, u )
+		end
+		local function get_y( v, u )
 			return not factors[ u ] and math.floor( v ) * self.dot_pitch.iy or v * factors[ u ].y
-	        end
+		end
 		return { get_x = get_x, get_y = get_y }
 	end )( )
+
+	self.evaluate = function ( axis, expr, old_res )
+		local res = 0.0
+		local glob, vars, to_val
+
+		if axis == "x" then
+			glob = "^([-+][0-9.]+)([cpdi])$"
+			vars = { P = self.padding_width, S = self.cell_margin_width, R = old_res or 0.0 }
+			to_val = self.units.get_x
+		elseif axis == "y" then
+			glob = "^([-+][0-9.]+)([cpdib])$"
+			vars = { P = self.padding_height, S = self.cell_margin_height, B = self.button_height, R = old_res or 0.0 }
+			to_val = self.units.get_y
+		else
+			return
+		end
+
+		local pos1 = 1
+
+		if not string.match( expr, "^[-+]" ) then expr = "+" .. expr end
+
+		while pos1 do
+			local pos2 = string.find( expr, "[-+]", pos1 + 1 )
+			local token = string.sub( expr, pos1, pos2 and pos2 - 1 )
+
+			if is_match( token, "^([-+])%$([A-Z])$" ) and vars[ _[ 2 ] ] then
+				res = res + tonumber( _[ 1 ] .. vars[ _[ 2 ] ] )
+			elseif is_match( token, glob ) then
+				res = res + to_val( tonumber( _[ 1 ] ), _[ 2 ] )
+			else
+				return
+			end
+
+			pos1 = pos2
+		end
+
+		return res
+	end
 
 	return self
 end
@@ -163,16 +214,24 @@ function RuntimeTranslator( screen_dpi, gui_scaling, has_padding )
 		end
 	end
 
+	self.get_pos_raw = function ( pos_value )
+		if pos_value then
+			return string.match( pos_value, "^(-?[0-9.]+)([icpd]?),(-?[0-9.]+)([icpdb]?)$" )
+		end
+	end
+
+	self.get_dim_raw = function ( dim_value )
+		if dim_value then
+			return string.match( dim_value, "^([0-9.]+)([iscpd]?),([0-9.]+)([iscpdb]?)$" )
+		end
+	end
+
 	return self
 end
 
 ------------------------------
 -- Generic Element Subclasses
 ------------------------------
-
-local function element( name, params )
-	return name .. "[" .. table.concat( params, ";" ) .. "]"
-end
 
 local function ElemPos( pos_units, length, has_padding )
 	return function ( tx, name, params )
@@ -214,30 +273,42 @@ end
 -- Special Element Subclasses 
 ------------------------------
 
+-- size[<w>,<h>]
+-- size[<w>,<h>;<x>,<y>]
+
 local function SizeElement( )
-	local pattern = "^([0-9.]+)([iscpd]?),([0-9.]+)([iscpdb]?)$"
-	local replace = "%0.3f,%0.3f,true"
-
 	return function ( tx, name, params )
-		local dim, count = string.gsub( params[ 1 ], pattern, function ( dim_x, u1, dim_y, u2 )
-			if u1 == "s" then
-				u1 = "i"
-				dim_x = dim_x + ( dim_x % 1 == 0 and dim_x - 1 or math.floor( dim_x ) ) * tx.cell_margin_width
-			end
-			if u2 == "s" then
-				u2 = "i"
-				dim_y = dim_x + ( dim_y % 1 == 0 and dim_y - 1 or math.floor( dim_y ) ) * tx.cell_margin_height
-			end
+		local pos_offset_x, pos_offset_y
+		local dim_x, u1, dim_y, u2 = tx.get_dim_raw( params[ 1 ] )
+		local pos_x, u3, pos_y, u4 = tx.get_pos_raw( params[ 2 ] )
 
-			-- original formulas:
-			-- padding.x * 2 + spacing.x * ( vx - 1.0 ) + imgsize.x
-			-- padding.y * 2 + spacing.y * ( vy - 1.0 ) + imgsize.y + m_btn_height * 2.0 / 3.0
-			return string.format( replace,
-				tx.units.get_x( dim_x, u1 ) + 1 - tx.padding_width * 2 - 4 / 5,
-				tx.units.get_y( dim_y, u2 ) + 1 - tx.padding_height * 2 - 13 / 15 - tx.button_height / 3
-			)
-		end )
-		assert( count == 1, "Cannot parse formspec element size[]" )
+		assert( #params == 1 and dim_x or #params == 2 and dim_x and ( params[ 2 ] == "" or pos_x ), "Cannot parse formspec element size[]" )
+
+		if u1 == "s" then
+			u1 = "c"
+			dim_x = dim_x - tx.cell_margin_width
+		end
+		if u2 == "s" then
+			u2 = "c"
+			dim_y = dim_y - tx.cell_margin_height
+		end
+
+		if not pos_x then
+			pos_offset_x = tx.padding_width
+			pos_offset_y = tx.padding_height
+		else
+			pos_offset_x = tx.units.get_x( pos_x, u3 )
+			pos_offset_y = tx.units.get_y( pos_y, u4 )
+		end
+		tx.insert_margin( pos_offset_x, pos_offset_y )
+
+		-- original formulas:
+		-- padding.x * 2 + spacing.x * ( vx - 1.0 ) + imgsize.x
+		-- padding.y * 2 + spacing.y * ( vy - 1.0 ) + imgsize.y + m_btn_height * 2.0 / 3.0
+		local dim =  string.format( "%0.3f,%0.3f",
+			tx.units.get_x( dim_x, u1 ) + 2 * pos_offset_x + 1 - tx.padding_width * 2 - 4 / 5,
+			tx.units.get_y( dim_y, u2 ) + 2 * pos_offset_y + 1 - tx.padding_height * 2 - 13 / 15 - tx.button_height / 3
+		)
 		return element( "size", { dim } )
 	end
 end
@@ -337,7 +408,7 @@ local function LabelElement( is_vertical )
 	end
 end
 
--- checkbox[<x>,<y>;<w>;<name>;<label>]
+-- checkbox[<x>,<y>;<name>;<label>;<selected>]
 
 local function CheckboxElement( )
 	return function ( tx, name, params )
@@ -349,11 +420,11 @@ local function CheckboxElement( )
 			-tx.padding_height + pos_offset_y,
 		} )
 		assert( pos and #params == 4, "Cannot parse formspec element checkbox[]" )
-		return element( "checkbox", { pos, unpack( params, 3 ) } )
+		return element( "checkbox", { pos, unpack( params, 2 ) } )
 	end
 end
 
--- button[<x>,<y>;<w>;<name>;<label>]
+-- button[<x>,<y>;<w>,<h>;<name>;<label>]
 
 local function ButtonElement( )
 	return function ( tx, name, params )
@@ -368,7 +439,7 @@ local function ButtonElement( )
 	end
 end
 
--- image_button[<x>,<y>;<w>;<name>;<texture_name>;<label>]
+-- image_button[<x>,<y>;<w>,<h>;<name>;<texture_name>;<label>]
 
 local function ImageButtonElement( )
 	return function ( tx, name, params )
@@ -398,7 +469,7 @@ local function ItemImageButtonElement( )
 	end
 end
 
--- textlist[<x>,<y>;<w>,<h>;<name>;...]
+-- textlist[<x>,<y>;<w>,<h>;<name>;<item_1>...;<selected_idx>]
 
 local function TextListElement( )
 	return function ( tx, name, params )
@@ -413,7 +484,7 @@ local function TextListElement( )
 	end
 end
 
--- dropdown[<x>,<y>;<w>,<h>;<name>;...]
+-- dropdown[<x>,<y>;<w>;<name>;<item_1>...;<selected_idx>]
 
 local function DropdownElement( )
 	return function ( tx, name, params )
@@ -514,7 +585,7 @@ local function AreaTooltipElement( )
 			0,
 			0
 		} )
-		assert( pos_and_dim and #params >= 3, "Cannot parse formspec element area_tooltip[]" )
+		assert( pos_and_dim and ( #params == 3 or #params == 5 ), "Cannot parse formspec element area_tooltip[]" )
 		return element( "tooltip", { pos_and_dim, unpack( params, 3 ) } )
 	end
 end
@@ -591,3 +662,148 @@ end
 scarlet.translate_72dpi = function ( fs )
 	return scarlet.translate( fs, 72, 1 )
 end
+
+----------------------------
+-- Registered Chat Commands
+----------------------------
+
+minetest.register_chatcommand( "scarlet", {
+        description = "Formspec unit-conversion calculator",
+        privs = { server = true },
+        func = function( name, param )
+		if param ~= "" then
+			if is_match( param, "^([xy]) (.+)" ) then
+				local axis = _[ 1 ]
+				local expr = _[ 2 ]
+				local res = UnitConversion( 72 ).evaluate( axis, expr )
+
+				if not res then
+					minetest.chat_send_player( name, "Parsing failure! Unrecognized token in expression." )
+				else
+					minetest.chat_send_player( name, string.format( "Result: %0.3fc", res ) )
+				end
+			else
+				minetest.chat_send_player( name, "Invalid parameters supplied!" )
+			end
+		else
+			local status = "Ready"
+			local old_res = 0.0
+			local old_expr = ""
+			local expr = ""
+			local axis = "x"
+			local dpi = 72
+
+			local function get_formspec( )
+				local fs =
+					"size[4s,8s;0.6c,0.4c]" ..
+					"no_prepend[]" ..
+					"bgcolor[#333333;false]" ..
+					"field[0c,0c;4s;expr;" .. minetest.formspec_escape( expr ) .. "]" ..
+					"box[0c,0.95c;2s,0.6c;" .. ( status == "Ready" and "#2222DD" or "#DD2222" ) .."]" ..
+					"caption[0c,1.05c;2s,0.5c; " .. status .. "]" ..
+
+					"margin[0c,1c]" ..
+					"button[2c,0c;1i,0.5i;clear_entry;CE]" ..
+					"button[3c,0c;1i,0.5i;clear;C]" ..
+					"margin_end[]" ..
+
+					"margin[0c,1.7c]" ..
+					"button[0c,0c;1i,1i;num7;7]" ..
+					"button[1c,0c;1i,1i;num8;8]" ..
+					"button[2c,0c;1i,1i;num9;9]" ..
+					"button[0c,1c;1i,1i;num4;4]" ..
+					"button[1c,1c;1i,1i;num5;5]" ..
+					"button[2c,1c;1i,1i;num6;6]" ..
+					"button[0c,2c;1i,1i;num1;1]" ..
+					"button[1c,2c;1i,1i;num2;2]" ..
+					"button[2c,2c;1i,1i;num3;3]" ..
+					"button[3c,0c;1i,1i;sub;-]" ..
+					"button[3c,1c;1i,1i;add;+]" ..
+					"button[3c,2c;1i,2s;eval;=]" ..
+					"button[0c,3c;2s,1i;num0;0]" ..
+					"button[2c,3c;1s,1i;dec;.]" ..
+					"margin_end[]" ..
+
+					"margin[0c,5.8c]" ..
+					"button[0c,0c;1i,0.5i;unitC;c]" ..
+					"button[1c,0c;1i,0.5i;unitI;i]" ..
+					"button[2c,0c;1i,0.5i;unitP;p]" ..
+					"button[3c,0c;1i,0.5i;unitD;d]" ..
+					"button[0c,0.5c;1i,0.5i;varB;$B]" ..
+					"button[1c,0.5c;1i,0.5i;varP;$P]" ..
+					"button[2c,0.5c;1i,0.5i;varS;$S]" ..
+					"button[3c,0.5c;1i,0.5i;varR;$R]" ..
+					"margin_end[]" ..
+
+					"margin[0c,7c]" ..
+					"dropdown[0c,0c;1.9c;axis;X Axis,Y Axis;" .. ( axis == "x" and 1 or 2 ) .. "]" ..
+					"dropdown[2c,0c;1.9c;dpi;72 dpi,96 dpi;" .. ( dpi == 72 and 1 or 2 ) .. "]" ..
+					"margin_end[]"
+
+				return scarlet.translate_72dpi( fs )
+			end
+
+	                local function on_close( meta, player, fields )
+				axis = ( { ["X Axis"] = "x", ["Y Axis"] = "y" } )[ fields.axis ] or "x"
+				dpi = ( { ["72 dpi"] = 72, ["96 dpi"] = 96 } )[ fields.dpi ] or 72
+
+				if fields.clear then
+					old_expr = expr
+					expr = ""
+					status = "Ready"
+	                       	        minetest.update_form( name, get_formspec( ) )
+
+				elseif fields.clear_entry then
+					expr = old_expr
+	                       	        minetest.update_form( name, get_formspec( ) )
+
+				elseif fields.eval then
+					local res = UnitConversion( dpi ).evaluate( axis, fields.expr, old_res )
+					if res then
+						old_res = res
+						old_expr = expr
+						expr = string.format( "%0.3fc", res )
+						status = "Ready"
+					else
+						expr = fields.expr
+						status = "Error"
+					end
+	                       	        minetest.update_form( name, get_formspec( ) )
+
+				elseif fields.expr then
+					old_expr = expr
+					expr = fields.expr
+					fields.expr = nil
+					fields.axis = nil
+					fields.dpi = nil
+
+		                        local field_name = next( fields, nil )     -- use next since we only care about the name of the first button
+        		                if field_name then
+						local aliases = {
+							sub = "-",
+							add = "+",
+							dec = ".",
+							varB = "$B",
+							varP = "$P",
+							varS = "$S",
+							varR = "$R",
+							unitC = "c",
+							unitI = "i",
+							unitP = "p",
+							unitD = "d",
+						}
+
+						if is_match( field_name, "^num([0-9])$" ) then
+							expr = expr .. _[ 1 ]
+						elseif aliases[ field_name ] then
+							expr = expr .. aliases[ field_name ]
+						end
+		                       	        minetest.update_form( name, get_formspec( ) )
+					end
+				end
+	                end
+
+        	        minetest.create_form( nil, name, get_formspec( ), on_close )
+		end
+	end
+} )
